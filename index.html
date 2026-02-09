@@ -254,7 +254,7 @@
       }
     }
 
-    async function handleApprove() {
+        async function handleApprove() {
       document.getElementById('approve-btn').disabled = true;
       document.getElementById('deny-btn').disabled = true;
       document.getElementById('approve-btn').textContent = 'Authorizing...';
@@ -264,69 +264,12 @@
         var session = sessionResult.data.session;
         if (!session) throw new Error('Session expired. Please reload and try again.');
 
-        var approveUrl = SUPABASE_URL + '/auth/v1/oauth/authorizations/' + AUTHORIZATION_ID + '/approve';
+        // Redirect back to Supabase authorize endpoint with consent
+        var redirectUrl = SUPABASE_URL + '/auth/v1/oauth/authorize?' +
+          'authorization_id=' + encodeURIComponent(AUTHORIZATION_ID) +
+          '&consent=approve';
 
-        var resp = await fetch(approveUrl, {
-          method: 'POST',
-          redirect: 'manual',
-          headers: {
-            'Content-Type': 'application/json',
-            'apikey': SUPABASE_ANON_KEY,
-            'Authorization': 'Bearer ' + session.access_token
-          }
-        });
-
-        // Check for redirect (302 from Supabase with auth code)
-        if (resp.status >= 300 && resp.status < 400) {
-          var location = resp.headers.get('Location');
-          if (location) {
-            window.location.href = location;
-            return;
-          }
-        }
-
-        if (resp.type === 'opaqueredirect') {
-          // Browser blocked reading the redirect, try again without manual redirect
-          var resp2 = await fetch(approveUrl, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'apikey': SUPABASE_ANON_KEY,
-              'Authorization': 'Bearer ' + session.access_token
-            }
-          });
-          if (resp2.redirected) {
-            window.location.href = resp2.url;
-            return;
-          }
-          var body2 = await resp2.text();
-          try {
-            var json2 = JSON.parse(body2);
-            if (json2.redirect_to || json2.redirect_uri) {
-              window.location.href = json2.redirect_to || json2.redirect_uri;
-              return;
-            }
-          } catch(e) {}
-        }
-
-        var bodyText = await resp.text();
-        try {
-          var body = JSON.parse(bodyText);
-          if (body.redirect_to || body.redirect_uri) {
-            window.location.href = body.redirect_to || body.redirect_uri;
-            return;
-          }
-        } catch(e) {}
-
-        if (!resp.ok) {
-          throw new Error('Approve failed (' + resp.status + '): ' + bodyText);
-        }
-
-        document.getElementById('result-message').innerHTML =
-          '<p style="font-size: 48px; margin-bottom: 16px;">&#9989;</p>' +
-          '<h2 style="margin-bottom: 8px;">Authorized!</h2>' +
-          '<p>You can close this window and return to Claude.</p>';
-        show('result-section');
+        window.location.href = redirectUrl;
 
       } catch (err) {
         showError('Failed to authorize: ' + (err.message || err));
@@ -337,42 +280,10 @@
     }
 
     async function handleDeny() {
-      document.getElementById('approve-btn').disabled = true;
-      document.getElementById('deny-btn').disabled = true;
-      document.getElementById('deny-btn').textContent = 'Denying...';
-
-      try {
-        var sessionResult = await sb.auth.getSession();
-        var session = sessionResult.data.session;
-        if (!session) throw new Error('Session expired.');
-
-        var denyUrl = SUPABASE_URL + '/auth/v1/oauth/authorizations/' + AUTHORIZATION_ID + '/deny';
-        var resp = await fetch(denyUrl, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'apikey': SUPABASE_ANON_KEY,
-            'Authorization': 'Bearer ' + session.access_token
-          }
-        });
-
-        if (resp.redirected) {
-          window.location.href = resp.url;
-          return;
-        }
-
-        document.getElementById('result-message').innerHTML =
-          '<p style="font-size: 48px; margin-bottom: 16px;">&#128683;</p>' +
-          '<h2 style="margin-bottom: 8px;">Denied</h2>' +
-          '<p>Authorization was denied. You can close this window.</p>';
-        show('result-section');
-
-      } catch (err) {
-        showError('Failed to deny: ' + (err.message || err));
-        document.getElementById('approve-btn').disabled = false;
-        document.getElementById('deny-btn').disabled = false;
-        document.getElementById('deny-btn').textContent = 'Deny';
-      }
+      var redirectUrl = SUPABASE_URL + '/auth/v1/oauth/authorize?' +
+        'authorization_id=' + encodeURIComponent(AUTHORIZATION_ID) +
+        '&consent=deny';
+      window.location.href = redirectUrl;
     }
 
     function escapeHtml(str) {

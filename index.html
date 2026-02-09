@@ -119,14 +119,12 @@
 
     <div id="consent-section" class="hidden">
       <div class="app-info">
-        <div class="app-name" id="client-name">Claude AI</div>
+        <div class="app-name" id="client-name">Application</div>
         <div class="app-detail" id="client-detail">wants to access your IOIQ account</div>
       </div>
       <div class="scopes-title">This will allow the application to:</div>
       <div id="scopes-list">
-        <div class="scope-item"><span class="scope-icon">&#10003;</span> View your profile information</div>
-        <div class="scope-item"><span class="scope-icon">&#10003;</span> Access your projects and context</div>
-        <div class="scope-item"><span class="scope-icon">&#10003;</span> Use IOIQ tools on your behalf</div>
+        <div class="scope-item"><span class="scope-icon">&#10003;</span> Access your account</div>
       </div>
       <div class="buttons">
         <button class="btn btn-deny" id="deny-btn" onclick="handleDeny()">Deny</button>
@@ -149,7 +147,6 @@
   </div>
 
   <script>
-    // Config - reads from URL params passed by edge function redirect
     var params = new URLSearchParams(window.location.search);
     var SUPABASE_URL = 'https://dvvsxbvttpaoevhkiiuw.supabase.co';
     var SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR2dnN4YnZ0dHBhb2V2aGtpaXV3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTE5NzQ2NzQsImV4cCI6MjA2NzU1MDY3NH0.IJcmIGZ9CAOEsaou_XIWgQR3EhmEBqV3KmRNJq_uqVA';
@@ -169,20 +166,47 @@
       show('error-section');
     }
 
+    function escapeHtml(str) {
+      var div = document.createElement('div');
+      div.textContent = str;
+      return div.innerHTML;
+    }
+
+    function scopeDescription(scope) {
+      var map = {
+        'openid': 'Verify your identity',
+        'email': 'View your email address',
+        'profile': 'View your profile information',
+        'phone': 'View your phone number'
+      };
+      return map[scope] || scope;
+    }
+
     async function init() {
+      console.log('[IOIQ] init, authorization_id:', AUTHORIZATION_ID);
+      console.log('[IOIQ] supabase-js version check');
+      console.log('[IOIQ] sb.auth.oauth exists:', !!sb.auth.oauth);
+      if (sb.auth.oauth) {
+        console.log('[IOIQ] oauth methods:', Object.keys(sb.auth.oauth));
+      }
+
       if (!AUTHORIZATION_ID) {
         showError('Missing authorization_id parameter.');
         return;
       }
+
       try {
         var result = await sb.auth.getSession();
         var session = result.data.session;
+        console.log('[IOIQ] session:', session ? 'found for ' + session.user.email : 'none');
+
         if (session) {
-          await loadConsentPage(session);
+          await loadAuthorizationDetails();
         } else {
           show('login-section');
         }
       } catch (err) {
+        console.error('[IOIQ] init error:', err);
         showError('Failed to initialize.', String(err));
       }
     }
@@ -211,8 +235,9 @@
           document.getElementById('login-btn').textContent = 'Sign In';
           return;
         }
+        console.log('[IOIQ] Logged in as:', result.data.session.user.email);
         show('loading');
-        await loadConsentPage(result.data.session);
+        await loadAuthorizationDetails();
       } catch (err) {
         errorEl.textContent = 'Login failed: ' + (err.message || err);
         errorEl.classList.remove('hidden');
@@ -221,57 +246,113 @@
       }
     }
 
-    async function loadConsentPage(session) {
+    async function loadAuthorizationDetails() {
       try {
-        var detailsUrl = SUPABASE_URL + '/auth/v1/oauth/authorizations/' + AUTHORIZATION_ID;
-        var resp = await fetch(detailsUrl, {
-          headers: {
-            'apikey': SUPABASE_ANON_KEY,
-            'Authorization': 'Bearer ' + session.access_token
-          }
-        });
+        // Use supabase-js OAuth method (requires v2.49+)
+        if (sb.auth.oauth && typeof sb.auth.oauth.getAuthorizationDetails === 'function') {
+          console.log('[IOIQ] Calling sb.auth.oauth.getAuthorizationDetails');
+          var result = await sb.auth.oauth.getAuthorizationDetails(AUTHORIZATION_ID);
+          console.log('[IOIQ] getAuthorizationDetails result:', JSON.stringify(result));
 
-        if (resp.ok) {
-          var details = await resp.json();
-          if (details.client_name || (details.client && details.client.name)) {
-            var name = details.client_name || details.client.name;
-            document.getElementById('client-name').textContent = name;
-            document.getElementById('client-detail').textContent = name + ' wants to access your IOIQ account';
-          }
-          if (details.scopes_requested || details.scopes) {
-            var scopes = details.scopes_requested || details.scopes;
-            if (Array.isArray(scopes) && scopes.length > 0) {
-              var html = scopes.map(function(s) {
-                return '<div class="scope-item"><span class="scope-icon">&#10003;</span> ' + escapeHtml(s) + '</div>';
+          if (!result.error && result.data) {
+            var details = result.data;
+            var clientName = details.client_name || details.name || 'Application';
+            document.getElementById('client-name').textContent = clientName;
+            document.getElementById('client-detail').textContent = clientName + ' wants to access your IOIQ account';
+
+            var scopeStr = details.scope || '';
+            var scopes = scopeStr.split(' ').filter(Boolean);
+            if (scopes.length > 0) {
+              document.getElementById('scopes-list').innerHTML = scopes.map(function(s) {
+                return '<div class="scope-item"><span class="scope-icon">&#10003;</span> ' + escapeHtml(scopeDescription(s)) + '</div>';
               }).join('');
-              document.getElementById('scopes-list').innerHTML = html;
             }
           }
+        } else {
+          console.warn('[IOIQ] sb.auth.oauth.getAuthorizationDetails not available');
         }
+
         show('consent-section');
       } catch (err) {
+        console.error('[IOIQ] loadAuthorizationDetails error:', err);
         show('consent-section');
       }
     }
 
-        async function handleApprove() {
+    async function handleApprove() {
       document.getElementById('approve-btn').disabled = true;
       document.getElementById('deny-btn').disabled = true;
       document.getElementById('approve-btn').textContent = 'Authorizing...';
 
       try {
+        console.log('[IOIQ] Approving authorization:', AUTHORIZATION_ID);
+
+        if (sb.auth.oauth && typeof sb.auth.oauth.approveAuthorization === 'function') {
+          // Use the official supabase-js method
+          var result = await sb.auth.oauth.approveAuthorization(AUTHORIZATION_ID);
+          console.log('[IOIQ] approveAuthorization result:', JSON.stringify(result));
+
+          if (result.error) {
+            throw new Error(result.error.message || JSON.stringify(result.error));
+          }
+
+          // Response contains redirect_to with authorization code
+          var redirectUrl = result.data && (result.data.redirect_to || result.data.url);
+          if (redirectUrl) {
+            console.log('[IOIQ] Redirecting to:', redirectUrl);
+            window.location.href = redirectUrl;
+            return;
+          }
+
+          // Success but no redirect
+          document.getElementById('result-message').innerHTML =
+            '<p style="font-size: 48px; margin-bottom: 16px;">&#9989;</p>' +
+            '<h2 style="margin-bottom: 8px;">Authorized!</h2>' +
+            '<p>You can close this window and return to Claude.</p>';
+          show('result-section');
+          return;
+        }
+
+        // Fallback: REST API call to consent endpoint
+        console.log('[IOIQ] Falling back to REST consent endpoint');
         var sessionResult = await sb.auth.getSession();
         var session = sessionResult.data.session;
-        if (!session) throw new Error('Session expired. Please reload and try again.');
+        if (!session) throw new Error('Session expired. Please reload.');
 
-        // Redirect back to Supabase authorize endpoint with consent
-        var redirectUrl = SUPABASE_URL + '/auth/v1/oauth/authorize?' +
-          'authorization_id=' + encodeURIComponent(AUTHORIZATION_ID) +
-          '&consent=approve';
+        var resp = await fetch(SUPABASE_URL + '/auth/v1/oauth/authorizations/' + AUTHORIZATION_ID + '/consent', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'apikey': SUPABASE_ANON_KEY,
+            'Authorization': 'Bearer ' + session.access_token
+          },
+          body: JSON.stringify({ consent: 'approve' })
+        });
 
-        window.location.href = redirectUrl;
+        console.log('[IOIQ] Consent response status:', resp.status);
+        var bodyText = await resp.text();
+        console.log('[IOIQ] Consent response body:', bodyText);
+
+        if (!resp.ok) {
+          throw new Error('Consent failed (' + resp.status + '): ' + bodyText);
+        }
+
+        try {
+          var body = JSON.parse(bodyText);
+          if (body.redirect_to || body.redirect_url || body.redirect_uri) {
+            window.location.href = body.redirect_to || body.redirect_url || body.redirect_uri;
+            return;
+          }
+        } catch (e) {}
+
+        document.getElementById('result-message').innerHTML =
+          '<p style="font-size: 48px; margin-bottom: 16px;">&#9989;</p>' +
+          '<h2 style="margin-bottom: 8px;">Authorized!</h2>' +
+          '<p>You can close this window and return to Claude.</p>';
+        show('result-section');
 
       } catch (err) {
+        console.error('[IOIQ] Approve error:', err);
         showError('Failed to authorize: ' + (err.message || err));
         document.getElementById('approve-btn').disabled = false;
         document.getElementById('deny-btn').disabled = false;
@@ -280,16 +361,56 @@
     }
 
     async function handleDeny() {
-      var redirectUrl = SUPABASE_URL + '/auth/v1/oauth/authorize?' +
-        'authorization_id=' + encodeURIComponent(AUTHORIZATION_ID) +
-        '&consent=deny';
-      window.location.href = redirectUrl;
-    }
+      document.getElementById('approve-btn').disabled = true;
+      document.getElementById('deny-btn').disabled = true;
+      document.getElementById('deny-btn').textContent = 'Denying...';
 
-    function escapeHtml(str) {
-      var div = document.createElement('div');
-      div.textContent = str;
-      return div.innerHTML;
+      try {
+        if (sb.auth.oauth && typeof sb.auth.oauth.denyAuthorization === 'function') {
+          var result = await sb.auth.oauth.denyAuthorization(AUTHORIZATION_ID);
+          console.log('[IOIQ] denyAuthorization result:', JSON.stringify(result));
+          var redirectUrl = result.data && (result.data.redirect_to || result.data.url);
+          if (redirectUrl) {
+            window.location.href = redirectUrl;
+            return;
+          }
+        } else {
+          var sessionResult = await sb.auth.getSession();
+          var session = sessionResult.data.session;
+          if (session) {
+            var resp = await fetch(SUPABASE_URL + '/auth/v1/oauth/authorizations/' + AUTHORIZATION_ID + '/consent', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'apikey': SUPABASE_ANON_KEY,
+                'Authorization': 'Bearer ' + session.access_token
+              },
+              body: JSON.stringify({ consent: 'deny' })
+            });
+            var bodyText = await resp.text();
+            try {
+              var body = JSON.parse(bodyText);
+              if (body.redirect_to || body.redirect_url || body.redirect_uri) {
+                window.location.href = body.redirect_to || body.redirect_url || body.redirect_uri;
+                return;
+              }
+            } catch (e) {}
+          }
+        }
+
+        document.getElementById('result-message').innerHTML =
+          '<p style="font-size: 48px; margin-bottom: 16px;">&#128683;</p>' +
+          '<h2 style="margin-bottom: 8px;">Denied</h2>' +
+          '<p>Authorization was denied. You can close this window.</p>';
+        show('result-section');
+
+      } catch (err) {
+        console.error('[IOIQ] Deny error:', err);
+        showError('Failed to deny: ' + (err.message || err));
+        document.getElementById('approve-btn').disabled = false;
+        document.getElementById('deny-btn').disabled = false;
+        document.getElementById('deny-btn').textContent = 'Deny';
+      }
     }
 
     init();
